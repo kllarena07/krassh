@@ -5,6 +5,45 @@ use std::{
 
 use rand::RngCore;
 
+fn create_ssh_packet(payload: Vec<u8>) -> Vec<u8> {
+    // SSH packet format: [packet_length][padding_length][payload][padding][MAC]
+    // packet_length: 4 bytes, includes padding_length + payload + padding
+    // padding_length: 1 byte, number of padding bytes
+    // padding: random bytes to make total size a multiple of 8 or cipher block size
+
+    let block_size = 8; // minimum block size for SSH
+    let min_padding = 4;
+
+    // Calculate required padding
+    let total_size = 1 + payload.len(); // padding_length + payload
+    let padding_needed = if total_size % block_size == 0 {
+        min_padding
+    } else {
+        min_padding + (block_size - (total_size % block_size))
+    };
+
+    let packet_length = 1 + payload.len() + padding_needed;
+
+    let mut packet = Vec::new();
+
+    // Packet length (4 bytes, big endian)
+    packet.extend_from_slice(&(packet_length as u32).to_be_bytes());
+
+    // Padding length (1 byte)
+    packet.push(padding_needed as u8);
+
+    // Payload
+    packet.extend_from_slice(&payload);
+
+    // Padding (random bytes)
+    let mut rng = rand::rng();
+    for _ in 0..padding_needed {
+        packet.push(rng.next_u32() as u8);
+    }
+
+    packet
+}
+
 fn to_name_list(value: &str) -> Vec<u8> {
     // A string containing a comma-separated list of names.
     // https://datatracker.ietf.org/doc/html/rfc4251#section-5
@@ -33,67 +72,107 @@ fn to_name_list(value: &str) -> Vec<u8> {
 fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     println!("{:?}", stream);
 
-    let mut buf = [0u8; 32768];
+    // Send identification string first
+    const IDENTIFICATION_STRING: &str = "SSH-2.0-rust_custom_ssh_1.0\r\n";
+    stream.write_all(IDENTIFICATION_STRING.as_bytes())?;
+    stream.flush()?;
+
+    // Read client identification string
+    let mut buf = [0u8; 256];
+    let mut identification_buf = Vec::new();
+
     loop {
         let n = stream.read(&mut buf)?;
+        if n == 0 {
+            return Ok(());
+        }
+
+        identification_buf.extend_from_slice(&buf[..n]);
+
+        // Check if we received the complete identification string (ends with \r\n)
+        if identification_buf.ends_with(b"\r\n") {
+            break;
+        }
+    }
+
+    println!(
+        "Client identification: {}",
+        String::from_utf8_lossy(&identification_buf)
+    );
+
+    // Build KEXINIT packet
+    let mut kex_payload: Vec<u8> = vec![];
+
+    // SSH_MSG_KEXINIT
+    kex_payload.push(20u8);
+
+    // byte[16], cookie (random bytes)
+    let mut cookie: [u8; 16] = [0; 16];
+    let mut rng = rand::rng();
+    rng.fill_bytes(&mut cookie);
+    kex_payload.extend_from_slice(&cookie);
+
+    //  name-list    kex_algorithms
+    const SUPPORTED_KEX_ALGORITHMS: &str = "curve25519-sha256";
+    kex_payload.extend_from_slice(&to_name_list(SUPPORTED_KEX_ALGORITHMS));
+
+    //  name-list    server_host_key_algorithms
+    const SERVER_HOST_KEY_ALGORITHMS: &str = "ssh-ed25519";
+    kex_payload.extend_from_slice(&to_name_list(SERVER_HOST_KEY_ALGORITHMS));
+
+    //  name-list    encryption_algorithms_client_to_server (ciphers)
+    const CS_CIPHERS: &str = "chacha20-poly1305@openssh.com";
+    kex_payload.extend_from_slice(&to_name_list(CS_CIPHERS));
+
+    //  name-list    encryption_algorithms_server_to_client (ciphers)
+    const SC_CIPHERS: &str = "chacha20-poly1305@openssh.com";
+    kex_payload.extend_from_slice(&to_name_list(SC_CIPHERS));
+
+    //  name-list    mac_algorithms_client_to_server
+    const CS_MAC_ALGOS: &str = "hmac-sha2-256";
+    kex_payload.extend_from_slice(&to_name_list(CS_MAC_ALGOS));
+
+    //  name-list    mac_algorithms_server_to_client
+    const SC_MAC_ALGOS: &str = "hmac-sha2-256";
+    kex_payload.extend_from_slice(&to_name_list(SC_MAC_ALGOS));
+
+    //  name-list    compression_algorithms_client_to_server
+    kex_payload.extend_from_slice(&to_name_list("")); // NONE
+
+    //  name-list    compression_algorithms_server_to_client
+    kex_payload.extend_from_slice(&to_name_list("")); // NONE
+
+    //  name-list    languages_client_to_server
+    kex_payload.extend_from_slice(&to_name_list("")); // NONE
+
+    //  name-list    languages_server_to_client
+    kex_payload.extend_from_slice(&to_name_list("")); // NONE
+
+    //  boolean      first_kex_packet_follows
+    kex_payload.push(0); // false
+
+    //  uint32       reserved (0)
+    kex_payload.extend_from_slice(&0u32.to_be_bytes());
+
+    // Create and send proper SSH packet
+    let kex_packet = create_ssh_packet(kex_payload);
+    stream.write_all(&kex_packet)?;
+    stream.flush()?;
+
+    println!("KEXINIT packet sent");
+
+    // Continue reading packets from client
+    loop {
+        let mut packet_buf = [0u8; 32768];
+        let n = stream.read(&mut packet_buf)?;
 
         if n == 0 {
             return Ok(());
         }
 
-        std::io::stdout().write_all(&buf[..n])?;
+        println!("Received {} bytes from client", n);
+        std::io::stdout().write_all(&packet_buf[..n])?;
         std::io::stdout().flush()?;
-
-        // send identification string
-        const IDENTIFICATION_STRING: &str = "SSH-2.0-rust_custom_ssh_1.0\r\n";
-        stream.write_all(IDENTIFICATION_STRING.as_bytes())?;
-        stream.flush()?;
-
-        // init KEX
-        let mut kex_packet: Vec<u8> = vec![];
-
-        // SSH_MSG_KEXINIT
-        kex_packet.push(20u8);
-
-        // byte[16], cookie (random bytes)
-        let mut cookie: [u8; 16] = [0; 16];
-        let mut rng = rand::rng();
-        rng.fill_bytes(&mut cookie);
-
-        for rand_num in cookie {
-            kex_packet.push(rand_num);
-        }
-        //  name-list    kex_algorithms
-        const SUPPORTED_KEX_ALGORITHMS: &str = "diffie-hellman-group14-sha256";
-        for cb in SUPPORTED_KEX_ALGORITHMS.as_bytes() {
-            let owned_cb = cb.to_owned();
-            kex_packet.push(owned_cb);
-        }
-        //  name-list    server_host_key_algorithms
-
-        //  name-list    encryption_algorithms_client_to_server (ciphers)
-
-        //  name-list    encryption_algorithms_server_to_client (ciphers)
-
-        //  name-list    mac_algorithms_client_to_server
-
-        //  name-list    mac_algorithms_server_to_client
-
-        //  name-list    compression_algorithms_client_to_server
-
-        //  name-list    compression_algorithms_server_to_client
-
-        //  name-list    languages_client_to_server
-        //  EMPTY
-        //  name-list    languages_server_to_client
-        //  EMPTY
-        //  boolean      first_kex_packet_follows
-        //  FALSE
-        //  uint32       0 (reserved for future extension)
-
-        // send kex packet
-        stream.write_all(&kex_packet)?;
-        stream.flush()?;
     }
 }
 
