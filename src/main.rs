@@ -1,5 +1,5 @@
 use std::{
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{TcpListener, TcpStream},
 };
 
@@ -30,24 +30,24 @@ fn to_name_list(value: &str) -> Vec<u8> {
     bytes
 }
 
-fn handle_client(mut stream: TcpStream) {
+fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     println!("{:?}", stream);
 
     let mut buf = [0u8; 32768];
     loop {
-        let n = stream.read(&mut buf).unwrap();
+        let n = stream.read(&mut buf)?;
 
         if n == 0 {
-            break;
+            return Ok(());
         }
 
-        std::io::stdout().write_all(&buf[..n]).unwrap();
-        std::io::stdout().flush().unwrap();
+        std::io::stdout().write_all(&buf[..n])?;
+        std::io::stdout().flush()?;
 
         // send identification string
         const IDENTIFICATION_STRING: &str = "SSH-2.0-rust_custom_ssh_1.0\r\n";
-        stream.write_all(IDENTIFICATION_STRING.as_bytes()).unwrap();
-        stream.flush().unwrap();
+        stream.write_all(IDENTIFICATION_STRING.as_bytes())?;
+        stream.flush()?;
 
         // init KEX
         let mut kex_packet: Vec<u8> = vec![];
@@ -91,9 +91,9 @@ fn handle_client(mut stream: TcpStream) {
         //  FALSE
         //  uint32       0 (reserved for future extension)
 
-        // send list of supported algorithms (KEX)
-        stream.write_all(&kex_packet).unwrap();
-        stream.flush().unwrap();
+        // send kex packet
+        stream.write_all(&kex_packet)?;
+        stream.flush()?;
     }
 }
 
@@ -101,7 +101,9 @@ fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind("0.0.0.0:3022")?;
 
     for stream in listener.incoming() {
-        handle_client(stream?);
+        if let Err(e) = handle_client(stream?) {
+            eprintln!("\n\nError: {}", e);
+        }
     }
 
     Ok(())
