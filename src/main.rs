@@ -104,6 +104,14 @@ fn to_name_list(value: &str) -> Vec<u8> {
     bytes
 }
 
+fn to_ssh_string(data: &[u8]) -> Vec<u8> {
+    // SSH string format: [4-byte length][data bytes]
+    let len = (data.len() as u32).to_be_bytes();
+    let mut result = len.to_vec();
+    result.extend_from_slice(data);
+    result
+}
+
 fn to_mpint(value: &[u8]) -> Vec<u8> {
     // Multiple precision integer in two's complement format
     // Format: [4-byte length][data bytes]
