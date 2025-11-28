@@ -209,7 +209,7 @@ fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     kex_payload.extend_from_slice(&cookie);
 
     //  name-list    kex_algorithms
-    const SUPPORTED_KEX_ALGORITHMS: &str = "curve25519-sha256";
+    const SUPPORTED_KEX_ALGORITHMS: &str = "diffie-hellman-group14-sha256";
     kex_payload.extend_from_slice(&to_name_list(SUPPORTED_KEX_ALGORITHMS));
 
     //  name-list    server_host_key_algorithms
