@@ -104,6 +104,67 @@ fn to_name_list(value: &str) -> Vec<u8> {
     bytes
 }
 
+fn to_mpint(value: &[u8]) -> Vec<u8> {
+    // Multiple precision integer in two's complement format
+    // Format: [4-byte length][data bytes]
+    // Examples:
+    // value (hex)        representation (hex)
+    // -----------        --------------------
+    // 0                  00 00 00 00
+    // 9a378f9b2e332a7    00 00 00 08 09 a3 78 f9 b2 e3 32 a7
+    // 80                 00 00 00 02 00 80
+    // -1234              00 00 00 02 ed cc
+    // -deadbeef          00 00 00 05 ff 21 52 41 11
+
+    // Remove unnecessary leading bytes
+    let mut trimmed = value.to_vec();
+
+    // Remove leading 0x00 bytes (for positive numbers)
+    while trimmed.len() > 1 && trimmed[0] == 0 && (trimmed[1] & 0x80) == 0 {
+        trimmed.remove(0);
+    }
+
+    // Check if most significant bit would be set (indicating negative)
+    // If so, prepend a zero byte to ensure it's interpreted as positive
+    if !trimmed.is_empty() && (trimmed[0] & 0x80) != 0 {
+        trimmed.insert(0, 0);
+    }
+
+    // Special case: zero should have zero bytes of data
+    if trimmed.iter().all(|&b| b == 0) {
+        trimmed.clear();
+    }
+
+    // Length prefix (4 bytes, big endian)
+    let len = (trimmed.len() as u32).to_be_bytes();
+    let mut result = len.to_vec();
+    result.extend_from_slice(&trimmed);
+
+    result
+}
+
+fn from_mpint(data: &[u8]) -> Result<Vec<u8>, &'static str> {
+    // Extract multiple precision integer from SSH format
+    // Format: [4-byte length][data bytes]
+
+    if data.len() < 4 {
+        return Err("MPINT too short");
+    }
+
+    // Extract length (first 4 bytes)
+    let len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+
+    // Check if we have enough data
+    if data.len() < 4 + len {
+        return Err("MPINT length exceeds data");
+    }
+
+    // Extract the actual integer bytes
+    let int_bytes = &data[4..4 + len];
+
+    Ok(int_bytes.to_vec())
+}
+
 fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     println!("{:?}", stream);
 
