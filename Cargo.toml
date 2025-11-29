@@ -1,5 +1,5 @@
 [package]
-name = "rust-custom-ssh"
+name = "krassh"
 version = "0.1.0"
 edition = "2024"
 

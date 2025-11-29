@@ -165,6 +165,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "krassh"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "num-bigint",
+ "rand",
+ "sha2",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.177"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -277,16 +287,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
 dependencies = [
  "getrandom 0.3.4",
-]
-
-[[package]]
-name = "rust-custom-ssh"
-version = "0.1.0"
-dependencies = [
- "ed25519-dalek",
- "num-bigint",
- "rand",
- "sha2",
 ]
 
 [[package]]
