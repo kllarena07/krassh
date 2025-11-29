@@ -48,6 +48,36 @@ fn create_ssh_packet(payload: Vec<u8>) -> Vec<u8> {
     packet
 }
 
+fn read_ssh_packet(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+    let mut packet_buf = Vec::new();
+    let mut temp_buf = [0u8; 1024];
+
+    loop {
+        let n = stream.read(&mut temp_buf)?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Connection closed",
+            ));
+        }
+        packet_buf.extend_from_slice(&temp_buf[..n]);
+
+        // Try to parse the packet to see if we have a complete one
+        if packet_buf.len() >= 4 {
+            let packet_length =
+                u32::from_be_bytes([packet_buf[0], packet_buf[1], packet_buf[2], packet_buf[3]])
+                    as usize;
+            let expected_size = packet_length + 4;
+
+            if packet_buf.len() >= expected_size {
+                break;
+            }
+        }
+    }
+
+    Ok(packet_buf)
+}
+
 fn from_ssh_packet(packet: &[u8]) -> Result<Vec<u8>, &'static str> {
     // return the ssh packet payload
     // SSH packet format: [packet_length][padding_length][payload][padding][MAC]
@@ -213,6 +243,7 @@ fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     const IDENTIFICATION_STRING: &str = "SSH-2.0-rust_custom_ssh_1.0\r\n";
     stream.write_all(IDENTIFICATION_STRING.as_bytes())?;
     stream.flush()?;
+    let server_ident_str = IDENTIFICATION_STRING.trim_end_matches("\r\n");
 
     // Read client identification string
     let mut buf = [0u8; 256];
@@ -232,10 +263,9 @@ fn handle_client(mut stream: TcpStream) -> io::Result<()> {
         }
     }
 
-    println!(
-        "Client identification: {}",
-        String::from_utf8_lossy(&identification_buf)
-    );
+    let client_ident_string = String::from_utf8_lossy(&identification_buf);
+    let client_ident_str = client_ident_string.trim_end_matches("\r\n");
+    println!("Client identification: {}", client_ident_str);
 
     // Build KEXINIT packet
     let mut kex_payload: Vec<u8> = vec![];
@@ -294,42 +324,27 @@ fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     kex_payload.extend_from_slice(&0u32.to_be_bytes());
 
     // Create and send proper SSH packet
-    let kex_packet = create_ssh_packet(kex_payload);
+    let kex_packet = create_ssh_packet(kex_payload.clone());
     stream.write_all(&kex_packet)?;
     stream.flush()?;
 
     println!("KEXINIT packet sent");
 
-    // Authenticate the USERAUTH_REQUEST (packet 30)
-    // ignore this packet
-    let mut packet_buf = [0u8; 32768];
-    loop {
-        let n = stream.read(&mut packet_buf)?;
-
-        if n == 0 {
-            return Ok(());
-        }
-
-        break;
-    }
-    println!("Recieved bytes: {}", String::from_utf8_lossy(&packet_buf));
+    // Receive client's KEXINIT packet
+    let packet_buf = read_ssh_packet(&mut stream)?;
+    let client_kexinit_payload =
+        from_ssh_packet(&packet_buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    println!(
+        "Received client KEXINIT payload: {:?}",
+        client_kexinit_payload
+    );
 
     // Next step is the Diffie-Hellman Key Exchange
-    let mut packet_buf: Vec<u8> = vec![];
-    let mut temp_buf = [0u8; 4096];
-    loop {
-        let n = stream.read(&mut temp_buf)?;
+    let packet_buf = read_ssh_packet(&mut stream)?;
+    println!("Received bytes: {:?}", packet_buf);
 
-        if n == 0 {
-            return Ok(());
-        }
-
-        packet_buf.extend_from_slice(&temp_buf[..n]);
-        break;
-    }
-    println!("Recieved bytes: {:?}", packet_buf);
-
-    let parsed = from_ssh_packet(&packet_buf).unwrap();
+    let parsed =
+        from_ssh_packet(&packet_buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     println!("Extracted SSH packet payload: {:?}", parsed);
 
     let mpint_data = &parsed[1..]; // Skip packet type 30
@@ -385,8 +400,14 @@ fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     // Shared secret H (exchange hash) - simplified for now
     // In real implementation, this should be SHA256 of all KEX parameters
     let mut hasher = Sha256::new();
-    hasher.update(&client_public_key);
-    hasher.update(&server_public_b_bytes);
+    hasher.update(to_ssh_string(client_ident_str.as_bytes())); // 1. Client ID
+    hasher.update(to_ssh_string(server_ident_str.as_bytes())); // 2. Server ID
+    hasher.update(to_ssh_string(&client_kexinit_payload)); // 3. Client KEXINIT
+    hasher.update(to_ssh_string(&kex_payload)); // 4. Server KEXINIT
+    hasher.update(to_ssh_string(&host_key_blob)); // 5. Host key
+    hasher.update(to_mpint(&client_public_key)); // 6. Client public key A
+    hasher.update(to_mpint(&server_public_b_bytes)); // 7. Server public key B
+    hasher.update(to_mpint(&shared_secret_k.to_bytes_be())); // 8. Shared secret K
     let exchange_hash = hasher.finalize();
 
     // Sign the exchange hash with host private key
