@@ -1,4 +1,5 @@
 use std::{
+    fs::File,
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
 };
@@ -194,13 +195,15 @@ DE2BCBF6955817183995497CEA956AE515D2261898FA0510\
     BigUint::parse_bytes(prime_hex.as_bytes(), 16).unwrap()
 }
 
-fn generate_host_key() -> (SigningKey, VerifyingKey) {
-    let mut rng = rand::rng();
-    let mut secret_key_bytes = [0u8; 32];
-    rng.fill_bytes(&mut secret_key_bytes);
-    let signing_key = SigningKey::from_bytes(&secret_key_bytes);
+fn load_host_key() -> io::Result<(SigningKey, VerifyingKey)> {
+    let mut private_key_bytes = [0u8; 32];
+    let mut file = File::open("authorized_keys/ssh_host_ed25519_key")
+        .map_err(|e| io::Error::new(e.kind(), format!("Failed to open host key file 'authorized_keys/ssh_host_ed25519_key': {}. Please run 'ssh-keygen -t ed25519 -f authorized_keys/ssh_host_ed25519_key -N \"\"' to generate the host key.", e)))?;
+    file.read_exact(&mut private_key_bytes)?;
+
+    let signing_key = SigningKey::from_bytes(&private_key_bytes);
     let verifying_key = signing_key.verifying_key();
-    (signing_key, verifying_key)
+    Ok((signing_key, verifying_key))
 }
 
 fn handle_client(mut stream: TcpStream) -> io::Result<()> {
@@ -359,7 +362,7 @@ fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     println!("Shared secret K: {:?}", shared_secret_k.to_bytes_be());
 
     // Generate host key
-    let (host_private_key, host_public_key) = generate_host_key();
+    let (host_private_key, host_public_key) = load_host_key()?;
 
     // 4. Send KEXDH_REPLY with B, host key, and signature of the exchange hash
     let mut kexdh_reply_payload: Vec<u8> = vec![];

@@ -1,1 +1,3 @@
 /target
+authorized_keys/*
+!authorized_keys/README.md
