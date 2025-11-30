@@ -460,6 +460,10 @@ fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     let kex_payload_rekey: Vec<u8> = vec![21u8];
 
     let rekey_kex_packet = create_ssh_packet(kex_payload_rekey);
+    println!(
+        "Sending back SSH2_MSG_NEWKEYS packet: {:?}",
+        rekey_kex_packet
+    );
     stream.write_all(&rekey_kex_packet)?;
     stream.flush()?;
 
