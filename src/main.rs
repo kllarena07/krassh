@@ -52,30 +52,47 @@ fn read_ssh_packet(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     let mut packet_buf = Vec::new();
     let mut temp_buf = [0u8; 1024];
 
-    loop {
+    // First, read the 4-byte length field
+    while packet_buf.len() < 4 {
         let n = stream.read(&mut temp_buf)?;
         if n == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "Connection closed",
+                "Connection closed while reading packet length",
             ));
         }
         packet_buf.extend_from_slice(&temp_buf[..n]);
-
-        // Try to parse the packet to see if we have a complete one
-        if packet_buf.len() >= 4 {
-            let packet_length =
-                u32::from_be_bytes([packet_buf[0], packet_buf[1], packet_buf[2], packet_buf[3]])
-                    as usize;
-            let expected_size = packet_length + 4;
-
-            if packet_buf.len() >= expected_size {
-                break;
-            }
-        }
     }
 
-    Ok(packet_buf)
+    // Parse packet length
+    let packet_length =
+        u32::from_be_bytes([packet_buf[0], packet_buf[1], packet_buf[2], packet_buf[3]]) as usize;
+    let total_packet_size = packet_length + 4;
+
+    // Validate packet length (reasonable bounds check)
+    if packet_length < 1 || packet_length > 65536 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Invalid packet length: {}", packet_length),
+        ));
+    }
+
+    // Read the rest of the packet
+    while packet_buf.len() < total_packet_size {
+        let remaining = total_packet_size - packet_buf.len();
+        let to_read = std::cmp::min(remaining, temp_buf.len());
+        let n = stream.read(&mut temp_buf[..to_read])?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Connection closed while reading packet data",
+            ));
+        }
+        packet_buf.extend_from_slice(&temp_buf[..n]);
+    }
+
+    // Return only the complete packet
+    Ok(packet_buf[..total_packet_size].to_vec())
 }
 
 fn from_ssh_packet(packet: &[u8]) -> Result<Vec<u8>, &'static str> {
